@@ -19,7 +19,7 @@
 # limitations under the License.
 #
 
-require 'chef/mixin/command'
+require 'mixlib/shellout'
 
 class Chef
   module RVM
@@ -29,7 +29,6 @@ class Chef
 
     class StringCache
       class << self
-        include Chef::Mixin::Command
         include Chef::RVM::ShellHelpers
       end
 
@@ -61,20 +60,12 @@ class Chef
       def self.canonical_ruby_string(str, user)
         Chef::Log.debug("Fetching canonical RVM string for: #{str} " +
                         "(#{user || 'system'})")
-        if user
-          user_dir = Etc.getpwnam(user).dir
-        else
-          user_dir = nil
-        end
 
-        cmd = ["source #{find_profile_to_source(user_dir)}",
-          "rvm_ruby_string='#{str}'", "__rvm_ruby_string",
-          "echo $rvm_ruby_string"].join(" && ")
-        pid, stdin, stdout, stderr = popen4('bash', shell_params(user, user_dir))
-        stdin.puts(cmd)
-        stdin.close
+        shell = build_shellout(user, str)
+        shell.run_command
+        shell.error!
 
-        result = stdout.read.split('\n').first.chomp
+        result = shell.stdout.split('\n').first.chomp
         if result =~ /^-/   # if the result has a leading dash, value is bogus
           Chef::Log.warn("Could not determine canonical RVM string for: #{str} " +
                          "(#{user || 'system'})")
@@ -85,7 +76,21 @@ class Chef
           result
         end
       end
-
+      
+      def self.build_shellout(user, str)
+        user_dir = user && Etc.getpwnam(user).dir
+        
+        cmd = ["source #{find_profile_to_source(user_dir)}",
+          "rvm_ruby_string='#{str}'", "__rvm_ruby_string",
+          "echo $rvm_ruby_string"].join(" && ")
+        env = if user
+                {'USER' => user, 'HOME' => Etc.getpwnam(user).dir}
+              else
+                {}
+              end
+        Mixlib::ShellOut.new(cmd, env: env, user: user )
+      end
+    
       def self.shell_params(user, user_dir)
         if user
           {
